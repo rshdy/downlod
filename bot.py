@@ -28,6 +28,7 @@ class SimpleBot:
         self.app.add_handler(CommandHandler("start", self.start))
         self.app.add_handler(CommandHandler("test", self.test_command))
         self.app.add_handler(CommandHandler("bypass", self.bypass_command))
+        self.app.add_handler(CommandHandler("testdownload", self.test_download_command))
         self.app.add_handler(CallbackQueryHandler(self.button_handler))
         self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
     
@@ -143,6 +144,20 @@ CHANNEL_USERNAME=@YOUR_CHANNEL
         
         await update.message.reply_text(message)
     
+    async def test_download_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """اختبار التحميل مع رابط تجريبي"""
+        user_id = update.effective_user.id
+        
+        if user_id != ADMIN_USER_ID:
+            await update.message.reply_text("❌ هذا الأمر للمشرف فقط")
+            return
+        
+        # رابط تجريبي قصير
+        test_url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+        
+        await update.message.reply_text("🧪 جاري اختبار التحميل بفيديو تجريبي...")
+        await self.download_video(update, context, test_url)
+    
     async def is_subscribed(self, user_id: int, context: ContextTypes.DEFAULT_TYPE):
         """التحقق من الاشتراك"""
         try:
@@ -237,7 +252,14 @@ CHANNEL_USERNAME=@YOUR_CHANNEL
         
         # التحقق من صحة الرابط
         if not self.is_url(text):
-            await update.message.reply_text("❌ يرجى إرسال رابط صحيح")
+            if text.startswith(('http://', 'https://')):
+                await update.message.reply_text(
+                    "❌ هذا الموقع غير مدعوم.\n\n"
+                    "📹 المواقع المدعومة:\n"
+                    "• YouTube\n• Facebook\n• Instagram\n• TikTok\n• Twitter\n• Vimeo"
+                )
+            else:
+                await update.message.reply_text("❌ يرجى إرسال رابط صحيح يبدأ بـ http أو https")
             return
         
         # تحميل الفيديو
@@ -245,25 +267,93 @@ CHANNEL_USERNAME=@YOUR_CHANNEL
     
     def is_url(self, text):
         """التحقق من صحة الرابط"""
-        return text.startswith(('http://', 'https://'))
+        if not text.startswith(('http://', 'https://')):
+            return False
+        
+        # قائمة المواقع المدعومة
+        supported_sites = [
+            'youtube.com', 'youtu.be', 'youtube.co.uk',
+            'facebook.com', 'fb.watch', 'fb.com',
+            'instagram.com', 'instagr.am',
+            'tiktok.com', 'vm.tiktok.com',
+            'twitter.com', 'x.com', 't.co',
+            'vimeo.com', 'dailymotion.com',
+            'twitch.tv', 'streamable.com'
+        ]
+        
+        return any(site in text.lower() for site in supported_sites)
     
     async def download_video(self, update: Update, context: ContextTypes.DEFAULT_TYPE, url: str):
         """تحميل الفيديو"""
+        status_message = None
+        filename = None
+        
         try:
             # إرسال رسالة التحميل
-            status_message = await update.message.reply_text("⏳ جاري تحميل الفيديو...")
+            status_message = await update.message.reply_text("⏳ جاري تحليل الرابط...")
             
-            # إعدادات التحميل
+            # إعدادات التحميل المحسنة
             ydl_opts = {
-                'format': 'best[height<=720]',
-                'outtmpl': 'video.%(ext)s',
+                'format': 'best[height<=480]/best[height<=720]/best[filesize<=50M]/best',
+                'outtmpl': f'downloads/%(title).60s.%(ext)s',  # حد أقصى 60 حرف للعنوان
                 'noplaylist': True,
+                'no_warnings': True,
+                'extractaudio': False,
+                'ignoreerrors': False,
+                'retries': 3,
+                'fragment_retries': 3,
+                'http_chunk_size': 10485760,  # 10MB chunks
+                'socket_timeout': 30,
+                'prefer_ffmpeg': True,
+                'keepvideo': False,
+                'writesubtitles': False,
+                'writeautomaticsub': False,
+                'subtitleslangs': [],
+                'postprocessors': [{
+                    'key': 'FFmpegVideoConvertor',
+                    'preferedformat': 'mp4',
+                }],
             }
+            
+            # إنشاء مجلد التحميل
+            os.makedirs('downloads', exist_ok=True)
+            
+            logger.info(f"بدء تحميل الفيديو من: {url}")
             
             # تحميل الفيديو
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=True)
+                # استخراج المعلومات أولاً
+                await status_message.edit_text("📊 جاري استخراج معلومات الفيديو...")
+                info = ydl.extract_info(url, download=False)
+                
+                # التحقق من حجم الفيديو
+                if info.get('filesize') and info['filesize'] > 50 * 1024 * 1024:  # 50MB
+                    await status_message.edit_text("⚠️ الفيديو كبير جداً. جاري تحميل نسخة مضغوطة...")
+                    ydl_opts['format'] = 'worst[height<=360]/worst'
+                
+                # تحميل الفيديو
+                await status_message.edit_text("⬇️ جاري تحميل الفيديو...")
+                ydl.download([url])
+                
+                # العثور على الملف المحمل
                 filename = ydl.prepare_filename(info)
+                
+                # البحث عن الملف في المجلد إذا لم يوجد
+                if not os.path.exists(filename):
+                    downloads_dir = 'downloads'
+                    if os.path.exists(downloads_dir):
+                        files = os.listdir(downloads_dir)
+                        if files:
+                            filename = os.path.join(downloads_dir, files[0])
+                
+                if not os.path.exists(filename):
+                    raise FileNotFoundError("لم يتم العثور على الملف المحمل")
+            
+            # التحقق من حجم الملف
+            file_size = os.path.getsize(filename)
+            if file_size > 50 * 1024 * 1024:  # 50MB
+                await status_message.edit_text("❌ الفيديو كبير جداً للإرسال (أكثر من 50MB)")
+                return
             
             # إرسال الفيديو
             await status_message.edit_text("📤 جاري إرسال الفيديو...")
@@ -272,17 +362,53 @@ CHANNEL_USERNAME=@YOUR_CHANNEL
                 await context.bot.send_video(
                     chat_id=update.effective_chat.id,
                     video=video_file,
-                    caption=f"🎬 {info.get('title', 'فيديو')}",
-                    reply_to_message_id=update.message.message_id
+                    caption=f"🎬 {info.get('title', 'فيديو')}\n💾 الحجم: {file_size / (1024*1024):.1f} MB",
+                    reply_to_message_id=update.message.message_id,
+                    supports_streaming=True
                 )
             
-            # حذف الملف
-            os.remove(filename)
-            await status_message.delete()
+            await status_message.edit_text("✅ تم إرسال الفيديو بنجاح!")
+            
+        except yt_dlp.utils.DownloadError as e:
+            error_msg = str(e)
+            logger.error(f"خطأ في التحميل: {error_msg}")
+            
+            if status_message:
+                if "not available" in error_msg.lower():
+                    await status_message.edit_text("❌ الفيديو غير متاح أو محذوف")
+                elif "private" in error_msg.lower():
+                    await status_message.edit_text("❌ الفيديو خاص ولا يمكن تحميله")
+                elif "geo" in error_msg.lower():
+                    await status_message.edit_text("❌ الفيديو محجوب جغرافياً")
+                else:
+                    await status_message.edit_text(f"❌ خطأ في التحميل: رابط غير صالح أو فيديو محمي")
+            
+        except FileNotFoundError:
+            logger.error("لم يتم العثور على الملف المحمل")
+            if status_message:
+                await status_message.edit_text("❌ فشل في تحميل الفيديو. جرب رابط آخر")
             
         except Exception as e:
-            logger.error(f"خطأ في التحميل: {e}")
-            await update.message.reply_text("❌ حدث خطأ في التحميل. تأكد من صحة الرابط")
+            logger.error(f"خطأ غير متوقع في التحميل: {e}")
+            if status_message:
+                await status_message.edit_text(f"❌ خطأ في التحميل: {str(e)[:100]}...")
+            
+        finally:
+            # تنظيف الملفات
+            try:
+                if filename and os.path.exists(filename):
+                    os.remove(filename)
+                    logger.info(f"تم حذف الملف: {filename}")
+                
+                # تنظيف مجلد التحميل
+                if os.path.exists('downloads'):
+                    for file in os.listdir('downloads'):
+                        file_path = os.path.join('downloads', file)
+                        if os.path.isfile(file_path):
+                            os.remove(file_path)
+                            
+            except Exception as cleanup_error:
+                logger.error(f"خطأ في تنظيف الملفات: {cleanup_error}")
     
     def run(self):
         """تشغيل البوت"""
