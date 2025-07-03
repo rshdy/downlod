@@ -27,6 +27,7 @@ class SimpleBot:
         """إعداد المعالجات"""
         self.app.add_handler(CommandHandler("start", self.start))
         self.app.add_handler(CommandHandler("test", self.test_command))
+        self.app.add_handler(CommandHandler("bypass", self.bypass_command))
         self.app.add_handler(CallbackQueryHandler(self.button_handler))
         self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
     
@@ -72,18 +73,73 @@ class SimpleBot:
             await update.message.reply_text("❌ هذا الأمر للمشرف فقط")
             return
         
+        # اختبار التحقق من الاشتراك
+        subscription_status = "⏳ جاري الفحص..."
+        try:
+            if CHANNEL_USERNAME == "@YOUR_CHANNEL":
+                subscription_status = "✅ وضع التجربة - لا يوجد تحقق من الاشتراك"
+            else:
+                is_sub = await self.is_subscribed(user_id, context)
+                subscription_status = f"{'✅ مشترك' if is_sub else '❌ غير مشترك'}"
+                
+                # اختبار إضافي للبوت في القناة
+                try:
+                    bot_member = await context.bot.get_chat_member(CHANNEL_USERNAME, context.bot.id)
+                    bot_status = f"🤖 البوت في القناة: ✅ {bot_member.status}"
+                    if bot_member.status not in ['administrator']:
+                        bot_status += " ⚠️ (يجب أن يكون مشرف)"
+                except Exception as e:
+                    bot_status = f"🤖 البوت في القناة: ❌ خطأ - {e}"
+        except Exception as e:
+            subscription_status = f"❌ خطأ في الفحص: {e}"
+            bot_status = "❌ لا يمكن فحص حالة البوت"
+        
         message = f"""🧪 اختبار البوت:
 
 👤 معرف المستخدم: {user_id}
 🔧 معرف القناة: {CHANNEL_USERNAME}
 👑 معرف المشرف: {ADMIN_USER_ID}
 
-📊 حالة البوت: {'✅ وضع التجربة' if CHANNEL_USERNAME == '@YOUR_CHANNEL' else '⚙️ وضع عادي'}
+📊 حالة الاشتراك: {subscription_status}
+{bot_status if 'bot_status' in locals() else ''}
 
 💡 إذا كان البوت لا يعمل، تأكد من:
-1. تغيير معرف القناة في Railway
-2. إضافة البوت كمشرف في القناة
-3. جعل القناة عامة"""
+1. البوت مشرف في القناة {CHANNEL_USERNAME}
+2. البوت له صلاحية "قراءة الأعضاء"
+3. القناة عامة وليست خاصة
+4. معرف القناة صحيح"""
+        
+        await update.message.reply_text(message)
+    
+    async def bypass_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """أمر تجاوز مشكلة الاشتراك للمشرف"""
+        user_id = update.effective_user.id
+        
+        if user_id != ADMIN_USER_ID:
+            await update.message.reply_text("❌ هذا الأمر للمشرف فقط")
+            return
+        
+        message = f"""🔧 إصلاح مشكلة الاشتراك:
+
+📋 **المشكلة**: البوت يقول "لم تشترك في القناة" رغم الاشتراك
+
+🛠️ **الحلول الفورية**:
+
+**الحل الأول** (الأسرع):
+في Railway، غير المتغير إلى:
+```
+CHANNEL_USERNAME=@YOUR_CHANNEL
+```
+سيعمل البوت بدون اشتراك إجباري.
+
+**الحل الثاني** (لإصلاح القناة):
+1. تأكد أن البوت مشرف في @{CHANNEL_USERNAME.replace('@', '')}
+2. أعط البوت صلاحية "قراءة الأعضاء"
+3. تأكد أن القناة عامة
+4. أعد تشغيل البوت في Railway
+
+**الحل الثالث** (للطوارئ):
+أرسل أي رابط فيديو هنا وسأحمله لك مباشرة بدون تحقق من الاشتراك."""
         
         await update.message.reply_text(message)
     
@@ -94,14 +150,33 @@ class SimpleBot:
             if CHANNEL_USERNAME == "@YOUR_CHANNEL":
                 return True
             
-            member = await context.bot.get_chat_member(CHANNEL_USERNAME, user_id)
-            return member.status in ['member', 'administrator', 'creator']
-        except TelegramError as e:
-            logger.error(f"خطأ في التحقق من الاشتراك: {e}")
-            # إذا كان الخطأ بسبب عدم وجود القناة، اسمح بالوصول
-            if "chat not found" in str(e).lower():
+            # إذا كان المستخدم هو المشرف، اسمح بالوصول
+            if user_id == ADMIN_USER_ID:
                 return True
-            return False
+            
+            member = await context.bot.get_chat_member(CHANNEL_USERNAME, user_id)
+            status = member.status
+            logger.info(f"حالة المستخدم {user_id} في القناة {CHANNEL_USERNAME}: {status}")
+            
+            return status in ['member', 'administrator', 'creator']
+            
+        except TelegramError as e:
+            error_message = str(e).lower()
+            logger.error(f"خطأ في التحقق من الاشتراك للمستخدم {user_id} في القناة {CHANNEL_USERNAME}: {e}")
+            
+            # أخطاء شائعة ومعالجتها
+            if "chat not found" in error_message:
+                logger.error("القناة غير موجودة أو معرف القناة خاطئ")
+                return True  # اسمح بالوصول إذا كانت القناة غير موجودة
+            elif "bot is not a member" in error_message or "forbidden" in error_message:
+                logger.error("البوت ليس عضو في القناة أو لا يملك الصلاحيات")
+                return True  # اسمح بالوصول إذا كان البوت غير مشرف
+            elif "user not found" in error_message:
+                logger.error("المستخدم غير موجود")
+                return False
+            else:
+                logger.error(f"خطأ غير معروف: {e}")
+                return True  # في حالة أي خطأ آخر، اسمح بالوصول
     
     async def button_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """معالج الأزرار"""
@@ -138,15 +213,24 @@ class SimpleBot:
         user_id = update.effective_user.id
         text = update.message.text
         
-        # التحقق من الاشتراك (إلا إذا كان معرف القناة لم يتم تغييره)
-        if CHANNEL_USERNAME != "@YOUR_CHANNEL" and not await self.is_subscribed(user_id, context):
+        # للمشرف: تجاهل التحقق من الاشتراك واعرض رسالة خاصة
+        if user_id == ADMIN_USER_ID and CHANNEL_USERNAME != "@YOUR_CHANNEL":
+            await update.message.reply_text(
+                f"👑 مرحباً أيها المشرف!\n\n"
+                f"💡 إذا كان البوت يقول للمستخدمين أنهم غير مشتركين في {CHANNEL_USERNAME}، "
+                f"استخدم الأمر /bypass لمعرفة الحلول.\n\n"
+                f"🎬 الآن سأحمل لك الفيديو..."
+            )
+        # التحقق من الاشتراك للمستخدمين العاديين (إلا إذا كان معرف القناة لم يتم تغييره)
+        elif CHANNEL_USERNAME != "@YOUR_CHANNEL" and not await self.is_subscribed(user_id, context):
             keyboard = [
                 [InlineKeyboardButton("📢 اشترك في القناة", url=f"https://t.me/{CHANNEL_USERNAME.replace('@', '')}")],
                 [InlineKeyboardButton("✅ تحقق من الاشتراك", callback_data="check")]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             await update.message.reply_text(
-                f"❌ لم تشترك في القناة بعد!\n\n📢 يجب الاشتراك في {CHANNEL_USERNAME} للاستخدام",
+                f"❌ لم تشترك في القناة بعد!\n\n📢 يجب الاشتراك في {CHANNEL_USERNAME} للاستخدام\n\n"
+                f"💡 إذا كنت مشترك ولا يزال البوت يعرض هذه الرسالة، تواصل مع المطور.",
                 reply_markup=reply_markup
             )
             return
