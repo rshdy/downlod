@@ -26,18 +26,34 @@ class SimpleBot:
     def setup_handlers(self):
         """إعداد المعالجات"""
         self.app.add_handler(CommandHandler("start", self.start))
+        self.app.add_handler(CommandHandler("test", self.test_command))
         self.app.add_handler(CallbackQueryHandler(self.button_handler))
         self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
     
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """أمر البداية"""
-        keyboard = [
-            [InlineKeyboardButton("📢 اشترك في القناة", url=f"https://t.me/{CHANNEL_USERNAME.replace('@', '')}")],
-            [InlineKeyboardButton("✅ تحقق من الاشتراك", callback_data="check")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        message = """🎬 مرحباً بك في بوت تحميل الفيديوهات!
+        # إذا كان معرف القناة لم يتم تغييره
+        if CHANNEL_USERNAME == "@YOUR_CHANNEL":
+            message = """🎬 مرحباً بك في بوت تحميل الفيديوهات!
+
+📹 يمكنني تحميل الفيديوهات من:
+• يوتيوب • فيسبوك • تيك توك • انستجرام
+
+🎵 يمكنني تحويل الفيديوهات إلى صوت
+
+✅ البوت يعمل في وضع التجربة - أرسل رابط الفيديو مباشرة!
+
+⚠️ ملاحظة للمطور: يجب تغيير معرف القناة في إعدادات البوت."""
+            
+            await update.message.reply_text(message)
+        else:
+            keyboard = [
+                [InlineKeyboardButton("📢 اشترك في القناة", url=f"https://t.me/{CHANNEL_USERNAME.replace('@', '')}")],
+                [InlineKeyboardButton("✅ تحقق من الاشتراك", callback_data="check")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            message = """🎬 مرحباً بك في بوت تحميل الفيديوهات!
 
 📹 يمكنني تحميل الفيديوهات من:
 • يوتيوب • فيسبوك • تيك توك • انستجرام
@@ -45,15 +61,46 @@ class SimpleBot:
 🎵 يمكنني تحويل الفيديوهات إلى صوت
 
 📢 للاستخدام يجب الاشتراك في القناة أولاً!"""
+            
+            await update.message.reply_text(message, reply_markup=reply_markup)
+    
+    async def test_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """أمر اختبار للمشرف"""
+        user_id = update.effective_user.id
         
-        await update.message.reply_text(message, reply_markup=reply_markup)
+        if user_id != ADMIN_USER_ID:
+            await update.message.reply_text("❌ هذا الأمر للمشرف فقط")
+            return
+        
+        message = f"""🧪 اختبار البوت:
+
+👤 معرف المستخدم: {user_id}
+🔧 معرف القناة: {CHANNEL_USERNAME}
+👑 معرف المشرف: {ADMIN_USER_ID}
+
+📊 حالة البوت: {'✅ وضع التجربة' if CHANNEL_USERNAME == '@YOUR_CHANNEL' else '⚙️ وضع عادي'}
+
+💡 إذا كان البوت لا يعمل، تأكد من:
+1. تغيير معرف القناة في Railway
+2. إضافة البوت كمشرف في القناة
+3. جعل القناة عامة"""
+        
+        await update.message.reply_text(message)
     
     async def is_subscribed(self, user_id: int, context: ContextTypes.DEFAULT_TYPE):
         """التحقق من الاشتراك"""
         try:
+            # إذا كان معرف القناة لم يتم تغييره، اسمح بالوصول
+            if CHANNEL_USERNAME == "@YOUR_CHANNEL":
+                return True
+            
             member = await context.bot.get_chat_member(CHANNEL_USERNAME, user_id)
             return member.status in ['member', 'administrator', 'creator']
-        except TelegramError:
+        except TelegramError as e:
+            logger.error(f"خطأ في التحقق من الاشتراك: {e}")
+            # إذا كان الخطأ بسبب عدم وجود القناة، اسمح بالوصول
+            if "chat not found" in str(e).lower():
+                return True
             return False
     
     async def button_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -63,6 +110,15 @@ class SimpleBot:
         
         if query.data == "check":
             user_id = update.effective_user.id
+            
+            # إذا كان معرف القناة لم يتم تغييره
+            if CHANNEL_USERNAME == "@YOUR_CHANNEL":
+                await query.edit_message_text(
+                    "⚠️ مرحباً! البوت يعمل في وضع التجربة.\n\n"
+                    "✅ يمكنك استخدام البوت الآن وإرسال رابط الفيديو.\n\n"
+                    "📝 ملاحظة: يجب على المطور تغيير معرف القناة في إعدادات البوت."
+                )
+                return
             
             if await self.is_subscribed(user_id, context):
                 await query.edit_message_text("✅ ممتاز! الآن أرسل رابط الفيديو الذي تريد تحميله")
@@ -82,8 +138,8 @@ class SimpleBot:
         user_id = update.effective_user.id
         text = update.message.text
         
-        # التحقق من الاشتراك
-        if not await self.is_subscribed(user_id, context):
+        # التحقق من الاشتراك (إلا إذا كان معرف القناة لم يتم تغييره)
+        if CHANNEL_USERNAME != "@YOUR_CHANNEL" and not await self.is_subscribed(user_id, context):
             keyboard = [
                 [InlineKeyboardButton("📢 اشترك في القناة", url=f"https://t.me/{CHANNEL_USERNAME.replace('@', '')}")],
                 [InlineKeyboardButton("✅ تحقق من الاشتراك", callback_data="check")]
