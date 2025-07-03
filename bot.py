@@ -26,9 +26,11 @@ class SimpleBot:
     def setup_handlers(self):
         """إعداد المعالجات"""
         self.app.add_handler(CommandHandler("start", self.start))
+        self.app.add_handler(CommandHandler("help", self.help_command))
         self.app.add_handler(CommandHandler("test", self.test_command))
         self.app.add_handler(CommandHandler("bypass", self.bypass_command))
         self.app.add_handler(CommandHandler("testdownload", self.test_download_command))
+        self.app.add_handler(CommandHandler("audio", self.audio_command))
         self.app.add_handler(CallbackQueryHandler(self.button_handler))
         self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
     
@@ -41,7 +43,8 @@ class SimpleBot:
 📹 يمكنني تحميل الفيديوهات من:
 • يوتيوب • فيسبوك • تيك توك • انستجرام
 
-🎵 يمكنني تحويل الفيديوهات إلى صوت
+🎵 لتحويل الفيديو إلى صوت استخدم:
+`/audio [رابط_الفيديو]`
 
 ✅ البوت يعمل في وضع التجربة - أرسل رابط الفيديو مباشرة!
 
@@ -60,11 +63,41 @@ class SimpleBot:
 📹 يمكنني تحميل الفيديوهات من:
 • يوتيوب • فيسبوك • تيك توك • انستجرام
 
-🎵 يمكنني تحويل الفيديوهات إلى صوت
+🎵 لتحويل الفيديو إلى صوت استخدم:
+`/audio [رابط_الفيديو]`
 
 📢 للاستخدام يجب الاشتراك في القناة أولاً!"""
             
             await update.message.reply_text(message, reply_markup=reply_markup)
+    
+    async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """أمر المساعدة"""
+        message = """🤖 مساعدة البوت:
+
+📹 **تحميل الفيديوهات:**
+• أرسل رابط الفيديو مباشرة
+• المواقع المدعومة: YouTube, Facebook, Instagram, TikTok, Twitter, Vimeo
+
+🎵 **تحويل إلى صوت:**
+• `/audio [رابط_الفيديو]`
+• مثال: `/audio https://youtube.com/watch?v=123`
+
+📱 **الأوامر:**
+• `/start` - بدء البوت
+• `/help` - المساعدة
+• `/audio [رابط]` - تحويل إلى صوت
+
+👑 **أوامر المشرف:**
+• `/test` - اختبار الإعدادات
+• `/bypass` - حل مشاكل الاشتراك
+• `/testdownload` - اختبار التحميل
+
+💡 **نصائح:**
+• استخدم روابط مباشرة من المتصفح
+• تجنب الروابط المختصرة
+• الفيديوهات يجب أن تكون أقل من 30 دقيقة"""
+        
+        await update.message.reply_text(message)
     
     async def test_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """أمر اختبار للمشرف"""
@@ -157,6 +190,130 @@ CHANNEL_USERNAME=@YOUR_CHANNEL
         
         await update.message.reply_text("🧪 جاري اختبار التحميل بفيديو تجريبي...")
         await self.download_video(update, context, test_url)
+    
+    async def audio_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """تحويل الفيديو إلى صوت"""
+        if len(context.args) == 0:
+            await update.message.reply_text(
+                "🎵 لتحويل فيديو إلى صوت:\n\n"
+                "أرسل الأمر: `/audio [رابط_الفيديو]`\n\n"
+                "مثال:\n"
+                "`/audio https://youtube.com/watch?v=123`"
+            )
+            return
+        
+        url = context.args[0]
+        await self.download_audio(update, context, url)
+    
+    async def download_audio(self, update: Update, context: ContextTypes.DEFAULT_TYPE, url: str):
+        """تحميل الصوت فقط"""
+        status_message = None
+        filename = None
+        
+        try:
+            # إرسال رسالة التحميل
+            status_message = await update.message.reply_text("🎵 جاري تحليل الرابط...")
+            
+            # إعدادات التحميل للصوت
+            ydl_opts = {
+                'format': 'bestaudio/best',
+                'outtmpl': '%(title)s.%(ext)s',
+                'noplaylist': True,
+                'no_warnings': False,
+                'extractaudio': True,
+                'audioformat': 'mp3',
+                'audioquality': '192',
+                'ignoreerrors': False,
+                'retries': 2,
+                'fragment_retries': 2,
+                'postprocessors': [{
+                    'key': 'FFmpegExtractAudio',
+                    'preferredcodec': 'mp3',
+                    'preferredquality': '192',
+                }],
+            }
+            
+            logger.info(f"بدء تحميل الصوت من: {url}")
+            
+            # تحميل الصوت
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                # استخراج المعلومات أولاً
+                await status_message.edit_text("📊 جاري استخراج معلومات الصوت...")
+                info = ydl.extract_info(url, download=False)
+                
+                if not info:
+                    raise Exception("لا يمكن استخراج معلومات الفيديو")
+                
+                title = info.get('title', 'صوت')
+                duration = info.get('duration', 0)
+                
+                # التحقق من مدة الصوت
+                if duration and duration > 3600:  # 1 ساعة
+                    await status_message.edit_text("❌ الصوت طويل جداً (أكثر من ساعة)")
+                    return
+                
+                # تحميل الصوت
+                await status_message.edit_text("⬇️ جاري تحميل الصوت...")
+                ydl.download([url])
+                
+                # العثور على الملف المحمل
+                filename = ydl.prepare_filename(info)
+                # تغيير الامتداد إلى mp3
+                filename = filename.rsplit('.', 1)[0] + '.mp3'
+                
+                # البحث عن الملف الصوتي إذا لم يوجد
+                if not os.path.exists(filename):
+                    for file in os.listdir('.'):
+                        if file.endswith(('.mp3', '.wav', '.ogg', '.m4a')):
+                            filename = file
+                            break
+                
+                if not filename or not os.path.exists(filename):
+                    raise FileNotFoundError("لم يتم العثور على الملف الصوتي")
+            
+            # التحقق من حجم الملف
+            file_size = os.path.getsize(filename)
+            if file_size > 50 * 1024 * 1024:  # 50MB
+                await status_message.edit_text("❌ الملف الصوتي كبير جداً للإرسال (أكثر من 50MB)")
+                return
+            
+            # إرسال الصوت
+            await status_message.edit_text("📤 جاري إرسال الصوت...")
+            
+            with open(filename, 'rb') as audio_file:
+                await context.bot.send_audio(
+                    chat_id=update.effective_chat.id,
+                    audio=audio_file,
+                    caption=f"🎵 {title}\n💾 الحجم: {file_size / (1024*1024):.1f} MB",
+                    reply_to_message_id=update.message.message_id,
+                    title=title,
+                    performer="Downloaded Audio"
+                )
+            
+            await status_message.edit_text("✅ تم إرسال الصوت بنجاح!")
+            
+        except Exception as e:
+            logger.error(f"خطأ في تحميل الصوت: {e}")
+            if status_message:
+                await status_message.edit_text(f"❌ خطأ في تحميل الصوت: {str(e)}")
+            
+        finally:
+            # تنظيف الملفات
+            try:
+                if filename and os.path.exists(filename):
+                    os.remove(filename)
+                    logger.info(f"تم حذف الملف: {filename}")
+                    
+                # تنظيف جميع ملفات الصوت في المجلد
+                for file in os.listdir('.'):
+                    if file.endswith(('.mp3', '.wav', '.ogg', '.m4a', '.part')):
+                        try:
+                            os.remove(file)
+                        except:
+                            pass
+                            
+            except Exception as cleanup_error:
+                logger.error(f"خطأ في تنظيف الملفات: {cleanup_error}")
     
     async def is_subscribed(self, user_id: int, context: ContextTypes.DEFAULT_TYPE):
         """التحقق من الاشتراك"""
@@ -256,10 +413,16 @@ CHANNEL_USERNAME=@YOUR_CHANNEL
                 await update.message.reply_text(
                     "❌ هذا الموقع غير مدعوم.\n\n"
                     "📹 المواقع المدعومة:\n"
-                    "• YouTube\n• Facebook\n• Instagram\n• TikTok\n• Twitter\n• Vimeo"
+                    "• YouTube\n• Facebook\n• Instagram\n• TikTok\n• Twitter\n• Vimeo\n\n"
+                    "🎵 لتحويل فيديو إلى صوت استخدم:\n"
+                    "`/audio [رابط_الفيديو]`"
                 )
             else:
-                await update.message.reply_text("❌ يرجى إرسال رابط صحيح يبدأ بـ http أو https")
+                await update.message.reply_text(
+                    "❌ يرجى إرسال رابط صحيح يبدأ بـ http أو https\n\n"
+                    "🎵 لتحويل فيديو إلى صوت استخدم:\n"
+                    "`/audio [رابط_الفيديو]`"
+                )
             return
         
         # تحميل الفيديو
@@ -292,31 +455,19 @@ CHANNEL_USERNAME=@YOUR_CHANNEL
             # إرسال رسالة التحميل
             status_message = await update.message.reply_text("⏳ جاري تحليل الرابط...")
             
-            # إعدادات التحميل المحسنة
+            # إعدادات التحميل البسيطة والفعالة
             ydl_opts = {
-                'format': 'best[height<=480]/best[height<=720]/best[filesize<=50M]/best',
-                'outtmpl': f'downloads/%(title).60s.%(ext)s',  # حد أقصى 60 حرف للعنوان
+                'format': 'best[height<=720]/best[height<=480]/best',
+                'outtmpl': '%(title)s.%(ext)s',
                 'noplaylist': True,
-                'no_warnings': True,
+                'no_warnings': False,
                 'extractaudio': False,
                 'ignoreerrors': False,
-                'retries': 3,
-                'fragment_retries': 3,
-                'http_chunk_size': 10485760,  # 10MB chunks
-                'socket_timeout': 30,
-                'prefer_ffmpeg': True,
-                'keepvideo': False,
+                'retries': 2,
+                'fragment_retries': 2,
                 'writesubtitles': False,
                 'writeautomaticsub': False,
-                'subtitleslangs': [],
-                'postprocessors': [{
-                    'key': 'FFmpegVideoConvertor',
-                    'preferedformat': 'mp4',
-                }],
             }
-            
-            # إنشاء مجلد التحميل
-            os.makedirs('downloads', exist_ok=True)
             
             logger.info(f"بدء تحميل الفيديو من: {url}")
             
@@ -326,10 +477,16 @@ CHANNEL_USERNAME=@YOUR_CHANNEL
                 await status_message.edit_text("📊 جاري استخراج معلومات الفيديو...")
                 info = ydl.extract_info(url, download=False)
                 
-                # التحقق من حجم الفيديو
-                if info.get('filesize') and info['filesize'] > 50 * 1024 * 1024:  # 50MB
-                    await status_message.edit_text("⚠️ الفيديو كبير جداً. جاري تحميل نسخة مضغوطة...")
-                    ydl_opts['format'] = 'worst[height<=360]/worst'
+                if not info:
+                    raise Exception("لا يمكن استخراج معلومات الفيديو")
+                
+                title = info.get('title', 'فيديو')
+                duration = info.get('duration', 0)
+                
+                # التحقق من مدة الفيديو
+                if duration and duration > 1800:  # 30 دقيقة
+                    await status_message.edit_text("❌ الفيديو طويل جداً (أكثر من 30 دقيقة)")
+                    return
                 
                 # تحميل الفيديو
                 await status_message.edit_text("⬇️ جاري تحميل الفيديو...")
@@ -338,15 +495,15 @@ CHANNEL_USERNAME=@YOUR_CHANNEL
                 # العثور على الملف المحمل
                 filename = ydl.prepare_filename(info)
                 
-                # البحث عن الملف في المجلد إذا لم يوجد
+                # البحث عن الملف إذا لم يوجد
                 if not os.path.exists(filename):
-                    downloads_dir = 'downloads'
-                    if os.path.exists(downloads_dir):
-                        files = os.listdir(downloads_dir)
-                        if files:
-                            filename = os.path.join(downloads_dir, files[0])
+                    # البحث في المجلد الحالي
+                    for file in os.listdir('.'):
+                        if file.endswith(('.mp4', '.avi', '.mkv', '.mov', '.webm', '.flv')):
+                            filename = file
+                            break
                 
-                if not os.path.exists(filename):
+                if not filename or not os.path.exists(filename):
                     raise FileNotFoundError("لم يتم العثور على الملف المحمل")
             
             # التحقق من حجم الملف
@@ -362,7 +519,7 @@ CHANNEL_USERNAME=@YOUR_CHANNEL
                 await context.bot.send_video(
                     chat_id=update.effective_chat.id,
                     video=video_file,
-                    caption=f"🎬 {info.get('title', 'فيديو')}\n💾 الحجم: {file_size / (1024*1024):.1f} MB",
+                    caption=f"🎬 {title}\n💾 الحجم: {file_size / (1024*1024):.1f} MB",
                     reply_to_message_id=update.message.message_id,
                     supports_streaming=True
                 )
@@ -371,17 +528,19 @@ CHANNEL_USERNAME=@YOUR_CHANNEL
             
         except yt_dlp.utils.DownloadError as e:
             error_msg = str(e)
-            logger.error(f"خطأ في التحميل: {error_msg}")
+            logger.error(f"خطأ yt-dlp: {error_msg}")
             
             if status_message:
-                if "not available" in error_msg.lower():
+                if "not available" in error_msg.lower() or "video unavailable" in error_msg.lower():
                     await status_message.edit_text("❌ الفيديو غير متاح أو محذوف")
-                elif "private" in error_msg.lower():
+                elif "private" in error_msg.lower() or "permission" in error_msg.lower():
                     await status_message.edit_text("❌ الفيديو خاص ولا يمكن تحميله")
-                elif "geo" in error_msg.lower():
+                elif "geo" in error_msg.lower() or "location" in error_msg.lower():
                     await status_message.edit_text("❌ الفيديو محجوب جغرافياً")
+                elif "unsupported" in error_msg.lower():
+                    await status_message.edit_text("❌ هذا النوع من الروابط غير مدعوم")
                 else:
-                    await status_message.edit_text(f"❌ خطأ في التحميل: رابط غير صالح أو فيديو محمي")
+                    await status_message.edit_text(f"❌ خطأ في التحميل: {error_msg}")
             
         except FileNotFoundError:
             logger.error("لم يتم العثور على الملف المحمل")
@@ -391,7 +550,7 @@ CHANNEL_USERNAME=@YOUR_CHANNEL
         except Exception as e:
             logger.error(f"خطأ غير متوقع في التحميل: {e}")
             if status_message:
-                await status_message.edit_text(f"❌ خطأ في التحميل: {str(e)[:100]}...")
+                await status_message.edit_text(f"❌ خطأ في التحميل: {str(e)}")
             
         finally:
             # تنظيف الملفات
@@ -399,13 +558,14 @@ CHANNEL_USERNAME=@YOUR_CHANNEL
                 if filename and os.path.exists(filename):
                     os.remove(filename)
                     logger.info(f"تم حذف الملف: {filename}")
-                
-                # تنظيف مجلد التحميل
-                if os.path.exists('downloads'):
-                    for file in os.listdir('downloads'):
-                        file_path = os.path.join('downloads', file)
-                        if os.path.isfile(file_path):
-                            os.remove(file_path)
+                    
+                # تنظيف جميع ملفات الفيديو في المجلد
+                for file in os.listdir('.'):
+                    if file.endswith(('.mp4', '.avi', '.mkv', '.mov', '.webm', '.flv', '.part')):
+                        try:
+                            os.remove(file)
+                        except:
+                            pass
                             
             except Exception as cleanup_error:
                 logger.error(f"خطأ في تنظيف الملفات: {cleanup_error}")
